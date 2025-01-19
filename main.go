@@ -30,8 +30,34 @@ type FuncLines struct {
 	Functions map[string][][2]int // file -> slice из [start, end] строк функций
 }
 
-// parseCoverFile разбирает файл покрытия и возвращает CoverageData.
-func parseCoverFile(coverFilePath string) (*CoverageData, error) {
+// parseGoMod читает файл go.mod и возвращает название модуля.
+func parseGoMod(goModPath string) (string, error) {
+	file, err := os.Open(goModPath)
+	if err != nil {
+		return "", fmt.Errorf("не удалось открыть go.mod: %v", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "module ") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				return fields[1], nil
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("ошибка чтения go.mod: %v", err)
+	}
+
+	return "", fmt.Errorf("название модуля не найдено в go.mod")
+}
+
+// CoverageData разбирает файл покрытия и возвращает CoverageData.
+func parseCoverFile(coverFilePath, moduleName string) (*CoverageData, error) {
 	f, err := os.Open(coverFilePath)
 	if err != nil {
 		return nil, err
@@ -63,8 +89,16 @@ func parseCoverFile(coverFilePath string) (*CoverageData, error) {
 		if len(pathAndRange) != 2 {
 			continue
 		}
-		relPath := pathAndRange[0]   // "github.com/user/repo/pkg/foo.go"
+		absPath := pathAndRange[0]   // "github.com/user/repo/pkg/foo.go"
 		rangePart := pathAndRange[1] // "23.21,28.2"
+
+		// Проверяем, начинается ли путь с названия модуля
+		if !strings.HasPrefix(absPath, moduleName+"/") {
+			// Возможно, путь абсолютный без названия модуля
+			// Можно попробовать использовать относительный путь
+			continue
+		}
+		relPath := strings.TrimPrefix(absPath, moduleName+"/") // "pkg/foo.go"
 
 		coverageCount, err := strconv.Atoi(coverageCountStr)
 		if err != nil {
@@ -94,10 +128,7 @@ func parseCoverFile(coverFilePath string) (*CoverageData, error) {
 
 		// Считаем, что если coverageCount > 0, то ВСЕ строки в диапазоне покрыты
 		if coverageCount > 0 {
-			// Нормализуем путь (на случай разных OS)
 			normalizedPath := filepath.ToSlash(relPath)
-			// Очистим первый сегмент (например, удалим "github.com/user/repo/")
-			normalizedPath = getRelativePath(normalizedPath)
 			if coverage.CoveredLines[normalizedPath] == nil {
 				coverage.CoveredLines[normalizedPath] = make(map[int]bool)
 			}
@@ -110,17 +141,8 @@ func parseCoverFile(coverFilePath string) (*CoverageData, error) {
 	return coverage, scanner.Err()
 }
 
-// getRelativePath удаляет первый сегмент пути.
-func getRelativePath(path string) string {
-	segments := strings.Split(path, "/")
-	if len(segments) > 1 {
-		return strings.Join(segments[1:], "/")
-	}
-	return path
-}
-
 // parseDiffFile разбирает diff с --unified=0 и формирует список новых/изменённых строк.
-func parseDiffFile(diffFilePath string) (*DiffData, error) {
+func parseDiffFile(diffFilePath, moduleName string) (*DiffData, error) {
 	f, err := os.Open(diffFilePath)
 	if err != nil {
 		return nil, err
@@ -151,7 +173,10 @@ func parseDiffFile(diffFilePath string) (*DiffData, error) {
 				path := fields[1] // b/pkg/foo.go
 				// убираем префикс "b/"
 				path = strings.TrimPrefix(path, "b/")
-				currentFile = filepath.ToSlash(path)
+				// Добавляем префикс модуля
+				fullPath := filepath.Join(moduleName, path)
+				normalizedPath := filepath.ToSlash(fullPath)
+				currentFile = normalizedPath
 			}
 			continue
 		}
@@ -319,13 +344,22 @@ func main() {
 	diffPath := flag.Arg(1)
 	sourceRoot := flag.Arg(2)
 
-	coverageData, err := parseCoverFile(coverPath)
+	// Получаем название модуля из go.mod
+	moduleName, err := parseGoMod(sourceRoot + "/go.mod")
+	if err != nil {
+		fmt.Printf("Error parsing go.mod: %v\n", err)
+		os.Exit(1)
+	}
+	// Вывод для проверки
+	// fmt.Printf("Module name: %s\n", moduleName)
+
+	coverageData, err := parseCoverFile(coverPath, moduleName)
 	if err != nil {
 		fmt.Printf("Error parsing cover file: %v\n", err)
 		os.Exit(1)
 	}
 
-	diffData, err := parseDiffFile(diffPath)
+	diffData, err := parseDiffFile(diffPath, moduleName)
 	if err != nil {
 		fmt.Printf("Error parsing diff file: %v\n", err)
 		os.Exit(1)
@@ -334,7 +368,13 @@ func main() {
 	// Получаем список файлов, которые нужно анализировать
 	var filesToAnalyze []string
 	for file := range diffData.NewLines {
-		filesToAnalyze = append(filesToAnalyze, file)
+		// Удаляем префикс модуля из пути
+		if strings.HasPrefix(file, moduleName+"/") {
+			relFile := strings.TrimPrefix(file, moduleName+"/")
+			filesToAnalyze = append(filesToAnalyze, relFile)
+		} else {
+			filesToAnalyze = append(filesToAnalyze, file)
+		}
 	}
 
 	if len(filesToAnalyze) == 0 {
@@ -354,22 +394,29 @@ func main() {
 	uncoveredLinesMap := make(map[string][]int) // file -> []lines
 
 	for file, newLinesSet := range diffData.NewLines {
-		// Ищем покрытие в coverageData
+		// Удаляем префикс модуля из пути
+		var relFile string
+		if strings.HasPrefix(file, moduleName+"/") {
+			relFile = strings.TrimPrefix(file, moduleName+"/")
+		} else {
+			relFile = file
+		}
+
 		// skip test files
-		if strings.Contains(file, "_test.go") {
+		if strings.Contains(relFile, "_test.go") {
 			continue
 		}
-		if strings.Contains(file, "coverage") {
+		if strings.Contains(relFile, "coverage") {
 			continue
 		}
 		// file не go
-		if !strings.HasSuffix(file, ".go") {
+		if !strings.HasSuffix(relFile, ".go") {
 			continue
 		}
 
 		for line := range newLinesSet {
 			// Проверяем, что строка находится внутри функции
-			if !isLineInFunctions(file, line, funcLines) {
+			if !isLineInFunctions(relFile, line, funcLines) {
 				continue
 			}
 
@@ -379,7 +426,7 @@ func main() {
 				coveredNewLines++
 			} else {
 				// Добавляем непокрытую строку в карту
-				uncoveredLinesMap[file] = append(uncoveredLinesMap[file], line)
+				uncoveredLinesMap[relFile] = append(uncoveredLinesMap[relFile], line)
 			}
 		}
 	}
