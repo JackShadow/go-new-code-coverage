@@ -1,3 +1,3 @@
-module go-new-code-coverage
+module github.com/JackShadow/go-new-code-coverage
 
 go 1.21
