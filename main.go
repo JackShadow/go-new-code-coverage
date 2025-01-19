@@ -198,7 +198,7 @@ func parseDiffFile(diffFilePath, moduleName string) (*DiffData, error) {
 				continue
 			}
 			// skip test
-			if strings.Contains(currentFile, "_test.go") || strings.Contains(currentFile, "coverage") {
+			if strings.Contains(currentFile, "_test.go") {
 				continue
 			}
 			// file не go
@@ -351,7 +351,7 @@ func main() {
 		os.Exit(1)
 	}
 	// Вывод для проверки
-	// fmt.Printf("Module name: %s\n", moduleName)
+	//fmt.Printf("Module name: %s\n", moduleName)
 
 	coverageData, err := parseCoverFile(coverPath, moduleName)
 	if err != nil {
@@ -406,9 +406,6 @@ func main() {
 		if strings.Contains(relFile, "_test.go") {
 			continue
 		}
-		if strings.Contains(relFile, "coverage") {
-			continue
-		}
 		// file не go
 		if !strings.HasSuffix(relFile, ".go") {
 			continue
@@ -422,7 +419,7 @@ func main() {
 
 			totalNewLines++
 
-			if coverageData.CoveredLines[file] != nil && coverageData.CoveredLines[file][line] {
+			if coverageData.CoveredLines[relFile] != nil && coverageData.CoveredLines[relFile][line] {
 				coveredNewLines++
 			} else {
 				// Добавляем непокрытую строку в карту
