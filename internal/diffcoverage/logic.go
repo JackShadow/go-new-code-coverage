@@ -247,6 +247,12 @@ func parseGoFiles(rootDir string, files []string) (*FuncLines, error) {
 			if funcDecl, ok := decl.(*ast.FuncDecl); ok {
 				start := fset.Position(funcDecl.Pos()).Line
 				end := fset.Position(funcDecl.End()).Line
+
+				if funcDecl.Body != nil && len(funcDecl.Body.List) > 0 {
+					//more precise function start line
+					start = fset.Position(funcDecl.Body.List[0].Pos()).Line
+				}
+
 				// Exclude the last line
 				if end > start {
 					end--
