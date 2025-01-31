@@ -193,8 +193,7 @@ func parseDiffFile(diffFilePath, moduleName string) (*DiffData, error) {
 
 			// Skip mock files
 			// @todo consider moving this to config
-			if strings.Contains(currentFile, "_mock") ||
-				strings.Contains(currentFile, "mock_") ||
+			if strings.Contains(currentFile, "mock") ||
 				strings.Contains(currentFile, "app") {
 				continue
 			}
