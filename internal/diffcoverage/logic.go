@@ -190,6 +190,15 @@ func parseDiffFile(diffFilePath, moduleName string) (*DiffData, error) {
 			if strings.Contains(currentFile, "_test.go") {
 				continue
 			}
+
+			// Skip mock files
+			// @todo consider moving this to config
+			if strings.Contains(currentFile, "_mock") ||
+				strings.Contains(currentFile, "mock_") ||
+				strings.Contains(currentFile, "app") {
+				continue
+			}
+
 			// Only handle .go files
 			if !strings.HasSuffix(currentFile, ".go") {
 				continue
